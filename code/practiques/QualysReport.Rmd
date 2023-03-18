@@ -1,6 +1,6 @@
 ---
 title: "Analysis of Qualys KDB"
-author: "Humbert Costas"
+author: "Marc Gracia i Riera"
 date: "`r Sys.Date()`"
 output: html_document
 ---
@@ -15,7 +15,11 @@ raw.file = "../../data/qualys/latest.qkdb.xml.zip"
 
 # Qualys KDB
 
-Lorem ipsum dolor sit amet, consectetur adipiscing elit. Etiam vitae erat dignissim, placerat nisi vitae, viverra ipsum. Etiam consectetur mattis pellentesque. Duis at porttitor eros. Morbi nisl eros, luctus efficitur dui ac, ultricies vulputate leo. Vestibulum accumsan, nunc id faucibus finibus, tellus ipsum venenatis odio, in luctus nisi lectus vel orci. Etiam pretium imperdiet lobortis. Vestibulum ut neque nec erat tempor laoreet et at erat. Nam varius dolor non neque maximus, ut egestas enim ultrices. Integer porttitor, leo id ornare pharetra, tellus erat cursus metus, eget rutrum augue dui at justo.
+En la primera matriz, a parte de recoger los valores ya definidos previamente, he decidido recoger también el campo PCI_FLAG.
+
+He visto que es un campo fácil de recoger y que además existe en las 20 primeras lineas del dataframe 'kdb'.
+
+De esta manera me puedo empezar a familiarizar con la recogida de datos.
 
 ```{r read_raw}
 doc <- xml2::read_xml(raw.file)
@@ -26,32 +30,94 @@ kdb <- data.frame(qid = rvest::html_text(rvest::html_elements(doc, xpath = "//VU
                   category = rvest::html_text(rvest::html_elements(doc, xpath = "//VULN/CATEGORY")),
                   severity = rvest::html_text(rvest::html_elements(doc, xpath = "//VULN/SEVERITY_LEVEL")),
                   patchable = rvest::html_text(rvest::html_elements(doc, xpath = "//VULN/PATCHABLE")),
+                  
+                  #Veo que en los primeros 5 ID's existe el campo PCI_FLAG, hago la prueba para ver si puedo recogerlo.
+                  pci = rvest::html_text(rvest::html_elements(doc, xpath = "//VULN/PCI_FLAG")),
                   published = rvest::html_text(rvest::html_elements(doc, xpath = "//VULN/LAST_SERVICE_MODIFICATION_DATETIME")),
                   stringsAsFactors = FALSE)
 kdb$published <- as.POSIXct.POSIXlt(strptime(x = kdb$published, format = "%Y-%m-%dT%TZ"))
 
-kable(head(kdb)) %>% kable_styling()
+kdbv2 <- head(kdb, n=20)
+
+kable(kdbv2) %>% kable_styling()
 ```
 
 ## Including Cybersecurity Standards
 
-Aliquam erat volutpat. Proin eget arcu et erat viverra eleifend. Quisque suscipit interdum blandit. Cras suscipit, nibh at mattis varius, purus massa pretium est, a malesuada felis velit sed leo. Nam quis malesuada orci. Aliquam consectetur molestie purus in rutrum. Curabitur purus libero, blandit vitae tempus quis, pharetra sit amet ex. Integer ligula lorem, gravida ac dui rutrum, sodales egestas augue. Etiam bibendum risus elit, quis dictum erat tristique id. Sed vulputate, turpis vel commodo molestie, lacus dui varius velit, vitae maximus tellus neque in urna. Donec non purus elementum, condimentum mi eu, semper dolor. Suspendisse malesuada turpis vel libero blandit varius. Cras rhoncus facilisis nunc sed efficitur. Suspendisse suscipit vel dui ut semper. Donec pellentesque tincidunt tincidunt.
+En el siguiente código vamos a eliminar de la matriz algunas columnas, y añadir otros valores. Además, voy a renombrar las columnas.
+
+En este ejercicio intento sacar valores que no están en todos los ID. Si no existe el valor, se escribe "NA".
+
+```{r add_cvss, echo=FALSE}
+
+#Eliminar columnas
+kdbv2 <- subset(kdbv2, select = -c(vuln_type, category, severity, patchable, pci, published))
+
+#Renombrar nombres de columnas
+colnames(kdbv2)[colnames(kdbv2)=="qid"] <- "ID"
+colnames(kdbv2)[colnames(kdbv2)=="title"] <- "Título"
+
+
+cvss_base_vals <- vector(mode = "character", length = nrow(kdbv2))
+
+for (i in 1:nrow(kdbv2)) {
+  qid_xpath <- paste0("//VULN[QID='", kdb$qid[i], "']") # expresión XPath para buscar QID específico
+  qid_node <- xml2::xml_find_first(doc, qid_xpath) # encontrar el nodo correspondiente a ese QID
+  
+  if (is.null(qid_node)) { # Si el QID no se encuentra, asignar NA
+    cvss_base_vals[i] <- "NA"
+  } else {
+    cvss_base_node <- xml2::xml_find_first(qid_node, ".//CVSS/TEMPORAL") # encontrar el nodo CVSS_V3/BASE a partir del nodo QID
+    if (is.null(cvss_base_node)) { # Si no se encuentra CVSS_V3/BASE, asignar NA
+      cvss_base_vals[i] <- "NA"
+    } else {
+      cvss_base_vals[i] <- xml2::xml_text(cvss_base_node) # si se encuentra, extraer el texto
+    }
+  }
+}
+
+# Agregar los valores de CVSS o NA al data frame 
+kdbv2$cvss_base <- cvss_base_vals
+
+
+```
 
 ```{r add_cve, echo=FALSE}
+# Crear un vector vacío para almacenar los valores de CVE_ID
+cve_ids <- vector(mode = "character", length = nrow(kdbv2))
+
+# Iterar a través de los valores de QID y buscar el valor de CVE
+for (i in 1:nrow(kdbv2)) {
+  qid_xpath <- paste0("//VULN[QID='", kdb$qid[i], "']") # expresión XPath para buscar QID específico
+  qid_node <- xml2::xml_find_first(doc, qid_xpath) # encontrar el nodo correspondiente a ese QID
+  
+  if (is.null(qid_node)) { # Si el QID no se encuentra, asignar NA
+    cve_ids[i] <- "NA"
+  } else {
+    cve_node <- xml2::xml_find_first(qid_node, ".//CVE_LIST/CVE/ID") # encontrar el nodo CVE/ID a partir del nodo QID
+    if (is.null(cve_node)) { # Si no se encuentra CVE/ID, asignar NA
+      cve_ids[i] <- "NA"
+    } else {
+      cve_ids[i] <- xml2::xml_text(cve_node) # si se encuentra, extraer el texto
+    }
+  }
+}
+
+# Agregar los valores de CVE o NA al data frame 
+kdbv2$cve_id <- cve_ids
 
 
 ```
 
-```{r add_cwe, echo=FALSE}
+```{r print_kdbv2, echo=FALSE}
 
+colnames(kdbv2)[colnames(kdbv2)=="cvss_base"] <- "CVSS"
+colnames(kdbv2)[colnames(kdbv2)=="cve_id"] <- "CVE"
 
-```
-
-```{r add_cpe, echo=FALSE}
-
+kable(kdbv2) %>% kable_styling()
 
 ```
 
 ## Conclusion
 
-Ut finibus, metus in tristique blandit, purus quam vulputate sapien, vitae rhoncus nunc orci et leo. Duis id justo bibendum, molestie nulla eget, ullamcorper massa. Sed porttitor leo tellus, a tristique nisi tincidunt lobortis. Donec in orci imperdiet, lobortis lorem hendrerit, vestibulum dolor. Proin laoreet, orci at iaculis blandit, odio ligula commodo nunc, eu pulvinar justo tortor sed eros. Ut convallis condimentum purus, ac viverra neque maximus ac. Vestibulum consequat facilisis odio vel tempor.
+Al final he intentado sacar los valores CVSS y los CVE, aunque consigo sacarlos bien. No he conseguido encontrar ningún ID que conteniera un CVE. Aun así, este ejercicio me ha ayudado a familiarizarme con la extracción de datos de un archivo XML.
