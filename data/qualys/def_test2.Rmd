@@ -164,7 +164,7 @@ results_matrix <- acast(results, other_size ~ critical_size, value.var = "accura
 row.names = c("50", "500", "1000", "2000", "3000", "3500", "3950") 
 col.names = c("50", "500", "1000", "2000", "3000", "3500", "3950")
 
-# Eliminar los nombres de fila y columna
+# Set row and column names
 rownames(results_matrix) <- row.names
 colnames(results_matrix) <- col.names
 
